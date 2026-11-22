@@ -1,0 +1,1260 @@
+openapi: 3.1.0
+info:
+  title: Spotlight I-ITSM API
+  version: 0.2.0
+  description: |
+    Incident, SLA, assignment and reporting API for the I-ITSM service.
+
+    **This file is the frozen contract.** The Next.js frontend generates its types from it
+    (`openapi-typescript`), and the Spring controllers are written against it. Change this
+    file first, in its own commit, or the two sides drift.
+
+    Authentication: `Authorization: Bearer <supabase-access-token>`. The service validates the
+    token and resolves the caller to an employee; it never issues tokens.
+
+    Errors are RFC 7807 `application/problem+json` with an extra `errorCode` field that is
+    stable and safe for the UI to branch on.
+servers:
+  - url: http://localhost:8081
+    description: Local
+  - url: https://itsm.spotlight.example
+    description: Deployed
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Incidents
+  - name: Lifecycle
+  - name: Suggestions
+  - name: Technicians
+  - name: Catalog
+  - name: SLA
+  - name: Settings
+  - name: Reports
+  - name: Audit
+  - name: Identity
+
+paths:
+  /api/v1/incidents:
+    get:
+      tags: [Incidents]
+      summary: Search incidents
+      description: |
+        The result is scoped by the caller's role: an employee sees only incidents they reported;
+        a technician sees their queue plus unassigned incidents; an administrator sees all.
+        All filters are optional and combine with AND.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - { name: q, in: query, schema: { type: string, maxLength: 200 }, description: Matches reference, title or description }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/IncidentStatus' } }
+        - { name: priority, in: query, schema: { $ref: '#/components/schemas/Priority' } }
+        - { name: categoryId, in: query, schema: { type: string, format: uuid } }
+        - { name: serviceId, in: query, schema: { type: string, format: uuid } }
+        - { name: technicianId, in: query, schema: { type: string, format: uuid } }
+        - { name: reporterId, in: query, schema: { type: string, format: uuid } }
+        - { name: createdFrom, in: query, schema: { type: string, format: date-time } }
+        - { name: createdTo, in: query, schema: { type: string, format: date-time } }
+        - { name: breachedOnly, in: query, schema: { type: boolean } }
+        - { name: openOnly, in: query, schema: { type: boolean, default: false } }
+        - { name: unassignedOnly, in: query, schema: { type: boolean, default: false }, description: Only incidents nobody has been assigned yet }
+        - { name: sort, in: query, schema: { type: string, enum: [newest, due, priority], default: newest } }
+      responses:
+        '200':
+          description: A page of incidents
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IncidentPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Incidents]
+      summary: Report an incident
+      description: |
+        Classifies, prioritises and computes the SLA window in one step, then returns the
+        incident. Priority and the SLA are server-derived — sending them is ignored.
+        Duplicate detection runs first; see `duplicateOf` in the response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateIncidentRequest' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incident' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422':
+          description: A business rule rejected the report (for example, no SLA policy)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /api/v1/incidents/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    get:
+      tags: [Incidents]
+      summary: Fetch one incident
+      responses:
+        '200':
+          description: The incident
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incident' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/incidents/{id}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    get:
+      tags: [Incidents]
+      summary: Full history, newest last
+      description: Status transitions, notes, attachments and escalations in one ordered feed.
+      responses:
+        '200':
+          description: Timeline entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TimelineEntry' }
+
+  /api/v1/incidents/{id}/notes:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    post:
+      tags: [Incidents]
+      summary: Add an investigation note or request information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, body]
+              properties:
+                kind: { $ref: '#/components/schemas/NoteKind' }
+                body: { type: string, minLength: 1, maxLength: 4000 }
+                attachmentIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        '201': { description: Created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/incidents/{id}/assign:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    post:
+      tags: [Lifecycle]
+      summary: Assign or reassign
+      description: |
+        Omit `technicianId` to let the configured strategy choose. Reassignment does not reset
+        the SLA clock. Assigning to an unavailable or at-capacity technician fails with 409.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                technicianId: { type: string, format: uuid, nullable: true }
+                strategyKey: { type: string, nullable: true, description: Overrides the category default }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Assigned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incident' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/incidents/{id}/transitions:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    post:
+      tags: [Lifecycle]
+      summary: Perform a lifecycle move
+      description: |
+        The single entry point for acknowledge, start, resolve, verify, reject, close and cancel.
+        The server validates the state graph and the actor's authority; an illegal move returns
+        409 with `errorCode: INVALID_TRANSITION`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransitionRequest' }
+      responses:
+        '200':
+          description: New state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incident' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/incidents/{id}/feedback:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    post:
+      tags: [Incidents]
+      summary: Rate the resolution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                comment: { type: string, maxLength: 2000 }
+      responses:
+        '201': { description: Recorded }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/incidents/{id}/suggestions:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    get:
+      tags: [Suggestions]
+      summary: Duplicates, related incidents and prior resolutions
+      description: |
+        Read-only intelligence. Every result carries its score so the UI can show why, and the
+        endpoint is deterministic — no model call is required for it to work.
+      responses:
+        '200':
+          description: Suggestions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Suggestions' }
+
+  /api/v1/me:
+    get:
+      tags: [Identity]
+      summary: The caller's service-desk roles
+      description: |
+        Roles are derived from data, never from the token: technician when a technician profile
+        exists, service-desk admin for a superuser or an admin of the ITSM department. The web app
+        uses this to decide which IT Service pages to show.
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+
+  /api/v1/incidents/similar:
+    post:
+      tags: [Suggestions]
+      summary: Open or recent incidents that look like a report that hasn't been submitted yet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceId, title]
+              properties:
+                serviceId: { type: string, format: uuid }
+                title: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: Candidates, most similar first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SimilarIncident' }
+
+  /api/v1/incidents/{id}/recommendations:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    get:
+      tags: [Technicians]
+      summary: Technicians ranked for this incident, with the reasons and which strategies pick them
+      responses:
+        '200':
+          description: Ranked candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TechnicianRecommendation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/incidents/{id}/links:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    post:
+      tags: [Suggestions]
+      summary: Link this incident to another as a duplicate or a related incident
+      description: |
+        With `relation: DUPLICATE` and `cancelAsDuplicate: true` the incident is also cancelled with
+        the reason "Duplicate of INC-…" and its reporter is told where to follow the original.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LinkRequest' }
+      responses:
+        '200':
+          description: The incident after linking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Incident' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/queue:
+    get:
+      tags: [Incidents]
+      summary: The technician's work queue
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - { name: mineOnly, in: query, schema: { type: boolean, default: true } }
+        - { name: includeUnassigned, in: query, schema: { type: boolean, default: true } }
+        - { name: sort, in: query, schema: { type: string, enum: [priority, due, newest], default: due } }
+      responses:
+        '200':
+          description: Queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IncidentPage' }
+
+  /api/v1/technicians:
+    get:
+      tags: [Technicians]
+      summary: Technicians with workload and skills
+      parameters:
+        - { name: availableOnly, in: query, schema: { type: boolean, default: false } }
+        - { name: serviceId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Technicians
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Technician' }
+  /api/v1/technicians/{employeeId}:
+    parameters:
+      - { name: employeeId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Technicians]
+      summary: Update capacity, availability, skills and services
+      description: Creates the technician profile when the employee doesn't have one yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TechnicianUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Technician' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    delete:
+      tags: [Technicians]
+      summary: Take someone off the service desk
+      description: Refused with 422 while they still hold open incidents; reassign those first.
+      responses:
+        '204': { description: Removed }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/catalog/services:
+    get:
+      tags: [Catalog]
+      summary: Service catalog
+      parameters:
+        - { name: includeInactive, in: query, schema: { type: boolean, default: false }, description: Admins only; include retired entries }
+      responses:
+        '200':
+          description: Services
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Service' }
+    post:
+      tags: [Catalog]
+      summary: Add a service to the catalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceWrite' }
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/catalog/services/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Catalog]
+      summary: Change a service's criticality, SLA profile, required skills or availability
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceWrite' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/catalog/categories:
+    get:
+      tags: [Catalog]
+      summary: Incident categories
+      parameters:
+        - { name: includeInactive, in: query, schema: { type: boolean, default: false }, description: Admins only; include retired entries }
+      responses:
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Category' }
+    post:
+      tags: [Catalog]
+      summary: Add an incident category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryWrite' }
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/catalog/categories/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Catalog]
+      summary: Rename, reorder or retire a category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryWrite' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/catalog/skills:
+    get:
+      tags: [Catalog]
+      summary: Skills
+      responses:
+        '200':
+          description: Skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Skill' }
+  /api/v1/catalog/categorise:
+    post:
+      tags: [Suggestions]
+      summary: Suggest a category, service, impact and urgency from free text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description]
+              properties:
+                description: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: Suggestion with confidence
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategorisationSuggestion' }
+
+  /api/v1/sla/profiles:
+    get:
+      tags: [SLA]
+      summary: SLA profiles and their per-priority targets
+      responses:
+        '200':
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SlaProfile' }
+  /api/v1/sla/profiles/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [SLA]
+      summary: Update an SLA profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SlaProfile' }
+      responses:
+        '200': { description: Updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/settings/assignment:
+    get:
+      tags: [Settings]
+      summary: The active default assignment strategy and the available ones
+      responses:
+        '200':
+          description: Assignment settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignmentSettings' }
+    put:
+      tags: [Settings]
+      summary: Change the default assignment strategy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [defaultStrategyKey]
+              properties:
+                defaultStrategyKey: { type: string }
+                perCategory:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        '200': { description: Updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/reports/overview:
+    get:
+      tags: [Reports]
+      summary: Headline counts
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OverviewReport' }
+  /api/v1/reports/workload:
+    get:
+      tags: [Reports]
+      summary: Technician workload
+      responses:
+        '200':
+          description: Workload rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WorkloadRow' }
+  /api/v1/reports/services:
+    get:
+      tags: [Reports]
+      summary: Incidents and SLA performance per service
+      responses:
+        '200':
+          description: Service rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ServiceReportRow' }
+  /api/v1/reports/sla:
+    get:
+      tags: [Reports]
+      summary: Compliance by priority
+      responses:
+        '200':
+          description: SLA rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SlaReportRow' }
+
+  /api/v1/reports/trend:
+    get:
+      tags: [Reports]
+      summary: Incidents opened, resolved and breached per day
+      parameters:
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 90, default: 14 } }
+      responses:
+        '200':
+          description: One row per day, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TrendPoint' }
+  /api/v1/reports/categories:
+    get:
+      tags: [Reports]
+      summary: Incidents and SLA violations per category
+      responses:
+        '200':
+          description: Category rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CategoryReportRow' }
+  /api/v1/reports/escalations:
+    get:
+      tags: [Reports]
+      summary: Recent automatic escalations
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Escalations, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EscalationRow' }
+
+  /api/v1/audit:
+    get:
+      tags: [Audit]
+      summary: Incident audit trail
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - { name: incidentId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IncidentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Authenticated but not permitted
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Not found
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: The request conflicts with the current state (illegal transition, capacity, duplicate)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unprocessable:
+      description: A business rule rejected the request
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        errorCode:
+          type: string
+          description: Stable code for the UI to branch on.
+          enum:
+            - INVALID_TRANSITION
+            - UNAUTHORIZED_ACTION
+            - VALIDATION_FAILED
+            - INCIDENT_NOT_FOUND
+            - DUPLICATE_INCIDENT
+            - TECHNICIAN_UNAVAILABLE
+            - CAPACITY_EXCEEDED
+            - SLA_POLICY_MISSING
+        instance: { type: string }
+
+    IncidentStatus:
+      type: string
+      enum: [NEW, CLASSIFIED, ASSIGNED, ACKNOWLEDGED, IN_PROGRESS, RESOLVED, VERIFIED, CLOSED, CANCELLED]
+    Priority:
+      type: string
+      enum: [P1, P2, P3, P4]
+    Impact:
+      type: string
+      enum: [MINIMAL, MINOR, MAJOR, EXTENSIVE]
+    Urgency:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+    BusinessCriticality:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL, REVENUE_OR_REGULATED]
+    SlaStatus:
+      type: string
+      enum: [ON_TRACK, WARNING, BREACHED, MET]
+    NoteKind:
+      type: string
+      enum: [INVESTIGATION, INFO_REQUEST, INFO_RESPONSE, RESOLUTION, INTERNAL]
+
+    PriorityAssessment:
+      type: object
+      properties:
+        score: { type: number }
+        priority: { $ref: '#/components/schemas/Priority' }
+        factors:
+          type: object
+          additionalProperties: { type: number }
+        explanation:
+          type: string
+          description: Human-readable working, shown as "why is this a P1?" in the UI.
+
+    SlaWindow:
+      type: object
+      properties:
+        startedAt: { type: string, format: date-time }
+        responseDueAt: { type: string, format: date-time }
+        resolutionDueAt: { type: string, format: date-time }
+        warningPercent: { type: integer }
+        responseStatus: { $ref: '#/components/schemas/SlaStatus' }
+        resolutionStatus: { $ref: '#/components/schemas/SlaStatus' }
+        resolutionRemainingMinutes: { type: integer }
+
+    Incident:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string, example: INC-2026-000123 }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/IncidentStatus' }
+        category: { $ref: '#/components/schemas/Category' }
+        service: { $ref: '#/components/schemas/Service' }
+        impact: { $ref: '#/components/schemas/Impact' }
+        urgency: { $ref: '#/components/schemas/Urgency' }
+        businessCriticality: { $ref: '#/components/schemas/BusinessCriticality' }
+        affectedUsers: { type: integer }
+        priority: { $ref: '#/components/schemas/Priority' }
+        priorityAssessment: { $ref: '#/components/schemas/PriorityAssessment' }
+        sla: { $ref: '#/components/schemas/SlaWindow' }
+        reporter:
+          type: object
+          properties:
+            employeeId: { type: string, format: uuid }
+            displayName: { type: string }
+        assignee:
+          type: object
+          nullable: true
+          properties:
+            employeeId: { type: string, format: uuid }
+            displayName: { type: string }
+        resolutionNote: { type: string, nullable: true }
+        duplicateOf:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            reference: { type: string }
+            similarity: { type: number }
+        escalationLevel: { type: integer, minimum: 0, maximum: 3 }
+        createdAt: { type: string, format: date-time }
+        assignedAt: { type: string, format: date-time, nullable: true }
+        firstResponseAt: { type: string, format: date-time, nullable: true }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+        verifiedAt: { type: string, format: date-time, nullable: true }
+        closedAt: { type: string, format: date-time, nullable: true }
+        version: { type: integer, description: Optimistic-lock token; send it back on updates }
+        cancellationReason: { type: string, nullable: true }
+        actions:
+          type: array
+          description: What the caller may do to this incident right now (state and role both checked).
+          items: { $ref: '#/components/schemas/IncidentAction' }
+        awaitingReporter:
+          type: boolean
+          description: The assignee asked the reporter for information and hasn't had a reply yet.
+        slaRisk: { $ref: '#/components/schemas/SlaRisk' }
+        feedback:
+          type: object
+          nullable: true
+          properties:
+            rating: { type: integer, minimum: 1, maximum: 5 }
+            comment: { type: string, nullable: true }
+            submittedAt: { type: string, format: date-time }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/IncidentLink' }
+
+    IncidentSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/IncidentStatus' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        serviceName: { type: string }
+        assigneeName: { type: string, nullable: true }
+        slaStatus: { $ref: '#/components/schemas/SlaStatus' }
+        dueAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: The next deadline on the clock. The response deadline until someone first responds, then the resolution deadline.
+        createdAt: { type: string, format: date-time }
+        reporterName: { type: string }
+        categoryName: { type: string, nullable: true }
+        slaRisk: { $ref: '#/components/schemas/SlaRisk' }
+        awaitingReporter: { type: boolean }
+
+    IncidentPage:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/IncidentSummary' }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer }
+        totalPages: { type: integer }
+
+    CreateIncidentRequest:
+      type: object
+      required: [title, description, categoryId, serviceId, impact, urgency]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 200 }
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        categoryId: { type: string, format: uuid }
+        serviceId: { type: string, format: uuid }
+        impact: { $ref: '#/components/schemas/Impact' }
+        urgency: { $ref: '#/components/schemas/Urgency' }
+        affectedUsers: { type: integer, minimum: 0, default: 1 }
+        securityIncident: { type: boolean, default: false }
+        attachmentIds:
+          type: array
+          items: { type: string, format: uuid }
+        relatedIncidentId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set when the reporter confirms a duplicate from the suggestion prompt.
+
+    TransitionRequest:
+      type: object
+      required: [to]
+      properties:
+        to: { $ref: '#/components/schemas/IncidentStatus' }
+        reason: { type: string, maxLength: 1000, description: Required for cancel and for rejecting a resolution }
+        resolutionNote: { type: string, maxLength: 4000, description: Required when moving to RESOLVED }
+        expectedVersion: { type: integer, description: Optimistic-lock guard }
+
+    TimelineEntry:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [TRANSITION, NOTE, ATTACHMENT, ESCALATION, FEEDBACK] }
+        actorName: { type: string, nullable: true }
+        fromStatus: { $ref: '#/components/schemas/IncidentStatus' }
+        toStatus: { $ref: '#/components/schemas/IncidentStatus' }
+        body: { type: string, nullable: true }
+        noteKind:
+          description: Set for NOTE entries. INTERNAL notes are only returned to service-desk staff.
+          allOf: [{ $ref: '#/components/schemas/NoteKind' }]
+        occurredAt: { type: string, format: date-time }
+
+    Suggestion:
+      type: object
+      properties:
+        incidentId: { type: string, format: uuid }
+        reference: { type: string }
+        title: { type: string }
+        similarity: { type: number }
+        relation: { type: string, enum: [DUPLICATE, RELATED, RESOLUTION] }
+
+    Suggestions:
+      type: object
+      properties:
+        duplicates:
+          type: array
+          items: { $ref: '#/components/schemas/Suggestion' }
+        related:
+          type: array
+          items: { $ref: '#/components/schemas/Suggestion' }
+        priorResolutions:
+          type: array
+          items:
+            type: object
+            properties:
+              incidentId: { type: string, format: uuid }
+              reference: { type: string }
+              resolutionNote: { type: string }
+              similarity: { type: number }
+
+    CategorisationSuggestion:
+      type: object
+      properties:
+        categoryId: { type: string, format: uuid, nullable: true }
+        categoryName: { type: string, nullable: true }
+        serviceId: { type: string, format: uuid, nullable: true }
+        serviceName: { type: string, nullable: true }
+        impact: { $ref: '#/components/schemas/Impact' }
+        urgency: { $ref: '#/components/schemas/Urgency' }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        matchedTerms:
+          type: array
+          items: { type: string }
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        sortOrder: { type: integer }
+        isActive: { type: boolean }
+
+    Service:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        categoryId: { type: string, format: uuid }
+        businessCriticality: { $ref: '#/components/schemas/BusinessCriticality' }
+        slaProfileId: { type: string, format: uuid, nullable: true }
+        isActive: { type: boolean }
+        description: { type: string, nullable: true }
+        requiredSkillIds:
+          type: array
+          items: { type: string, format: uuid }
+
+    ServiceWrite:
+      type: object
+      required: [name, categoryId, businessCriticality]
+      properties:
+        code: { type: string, maxLength: 40, description: Generated from the name when omitted on create }
+        name: { type: string, maxLength: 160 }
+        description: { type: string, nullable: true }
+        categoryId: { type: string, format: uuid }
+        businessCriticality: { $ref: '#/components/schemas/BusinessCriticality' }
+        slaProfileId: { type: string, format: uuid, nullable: true }
+        isActive: { type: boolean, default: true }
+        requiredSkillIds:
+          type: array
+          items: { type: string, format: uuid }
+
+    CategoryWrite:
+      type: object
+      required: [name]
+      properties:
+        code: { type: string, maxLength: 40, description: Generated from the name when omitted on create }
+        name: { type: string, maxLength: 120 }
+        description: { type: string, nullable: true }
+        sortOrder: { type: integer }
+        isActive: { type: boolean, default: true }
+
+    Skill:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+
+    Technician:
+      type: object
+      properties:
+        employeeId: { type: string, format: uuid }
+        displayName: { type: string }
+        isAvailable: { type: boolean }
+        activeIncidents: { type: integer }
+        maxActiveIncidents: { type: integer }
+        utilisationPercent: { type: number }
+        experienceYears: { type: integer }
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              skillId: { type: string, format: uuid }
+              name: { type: string }
+              proficiency: { type: integer, minimum: 1, maximum: 5 }
+        serviceIds:
+          type: array
+          items: { type: string, format: uuid }
+        teamLeadId: { type: string, format: uuid, nullable: true }
+        teamLeadName: { type: string, nullable: true }
+
+    TechnicianUpdate:
+      type: object
+      properties:
+        isAvailable: { type: boolean }
+        maxActiveIncidents: { type: integer, minimum: 1 }
+        experienceYears: { type: integer, minimum: 0 }
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              skillId: { type: string, format: uuid }
+              proficiency: { type: integer, minimum: 1, maximum: 5 }
+        serviceIds:
+          type: array
+          description: Services the technician has worked on (experience-based matching).
+          items: { type: string, format: uuid }
+        teamLeadId: { type: string, format: uuid, nullable: true, description: First stop when their incident escalates }
+
+    SlaProfile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        isActive: { type: boolean }
+        targets:
+          type: array
+          items:
+            type: object
+            properties:
+              priority: { $ref: '#/components/schemas/Priority' }
+              responseMinutes: { type: integer, minimum: 1 }
+              resolutionMinutes: { type: integer, minimum: 1 }
+              warningPercent: { type: integer, minimum: 1, maximum: 100 }
+
+    AssignmentSettings:
+      type: object
+      properties:
+        defaultStrategyKey: { type: string }
+        strategies:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              label: { type: string }
+        perCategory:
+          type: object
+          additionalProperties: { type: string }
+
+    OverviewReport:
+      type: object
+      properties:
+        totalIncidents: { type: integer }
+        openIncidents: { type: integer }
+        criticalIncidents: { type: integer }
+        resolvedIncidents: { type: integer }
+        slaViolations: { type: integer }
+        slaCompliancePercent: { type: number }
+        averageResolutionMinutes: { type: number }
+
+    WorkloadRow:
+      type: object
+      properties:
+        employeeId: { type: string, format: uuid }
+        displayName: { type: string }
+        activeIncidents: { type: integer }
+        resolvedIncidents: { type: integer }
+        utilisationPercent: { type: number }
+        isAvailable: { type: boolean }
+
+    ServiceReportRow:
+      type: object
+      properties:
+        serviceId: { type: string, format: uuid }
+        name: { type: string }
+        businessCriticality: { $ref: '#/components/schemas/BusinessCriticality' }
+        incidents: { type: integer }
+        p1Incidents: { type: integer }
+        slaViolations: { type: integer }
+        averageResolutionMinutes: { type: number }
+
+    SlaReportRow:
+      type: object
+      properties:
+        priority: { $ref: '#/components/schemas/Priority' }
+        incidents: { type: integer }
+        responseMet: { type: integer }
+        resolutionMet: { type: integer }
+        compliancePercent: { type: number }
+
+    AuditEntry:
+      type: object
+      properties:
+        id: { type: string }
+        incidentId: { type: string, format: uuid, nullable: true }
+        incidentReference: { type: string, nullable: true }
+        subject: { type: string, description: 'What changed, in words: an incident reference, "Service: VPN", "Assignment settings"' }
+        actorName: { type: string, nullable: true }
+        action: { type: string }
+        oldValues: { type: object, additionalProperties: true }
+        newValues: { type: object, additionalProperties: true }
+        occurredAt: { type: string, format: date-time }
+
+    Me:
+      type: object
+      properties:
+        employeeId: { type: string, format: uuid }
+        displayName: { type: string }
+        technician: { type: boolean }
+        serviceDeskAdmin: { type: boolean }
+        departments:
+          type: array
+          items: { type: string }
+
+    IncidentAction:
+      type: string
+      description: |
+        ACKNOWLEDGE, START_WORK and RESOLVE belong to the assignee; VERIFY and REJECT_RESOLUTION to
+        the reporter; CLOSE and CANCEL to the reporter or an admin; ASSIGN and LINK to admins; TAKE
+        to a technician looking at an unassigned incident; RESPOND to the reporter; REQUEST_INFO and
+        ADD_NOTE to the assignee or an admin; FEEDBACK to the reporter once closed.
+      enum: [ACKNOWLEDGE, START_WORK, RESOLVE, VERIFY, REJECT_RESOLUTION, CLOSE, CANCEL, ASSIGN, TAKE,
+             ADD_NOTE, REQUEST_INFO, RESPOND, FEEDBACK, LINK]
+
+    SlaRisk:
+      type: string
+      nullable: true
+      description: |
+        How likely the resolution deadline is to be missed, from the time left against how long
+        similar incidents (same service and priority) have historically taken. Null once closed.
+      enum: [LOW, MEDIUM, HIGH]
+
+    IncidentLink:
+      type: object
+      properties:
+        incidentId: { type: string, format: uuid }
+        reference: { type: string }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/IncidentStatus' }
+        relation: { type: string, enum: [DUPLICATE, RELATED, PARENT, CHILD] }
+        similarity: { type: number }
+
+    LinkRequest:
+      type: object
+      required: [relatedIncidentId, relation]
+      properties:
+        relatedIncidentId: { type: string, format: uuid }
+        relation: { type: string, enum: [DUPLICATE, RELATED] }
+        cancelAsDuplicate: { type: boolean, default: false }
+
+    SimilarIncident:
+      type: object
+      properties:
+        incidentId: { type: string, format: uuid }
+        reference: { type: string }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/IncidentStatus' }
+        similarity: { type: number }
+        createdAt: { type: string, format: date-time }
+
+    TechnicianRecommendation:
+      type: object
+      properties:
+        employeeId: { type: string, format: uuid }
+        displayName: { type: string }
+        score: { type: number, description: 0-100, higher is a better fit }
+        isAvailable: { type: boolean }
+        activeIncidents: { type: integer }
+        maxActiveIncidents: { type: integer }
+        experienceYears: { type: integer }
+        skillMatch: { type: number, description: 0-1 coverage of the service's required skills }
+        knowsService: { type: boolean }
+        pickedBy:
+          type: array
+          description: Labels of the assignment strategies that would choose this technician.
+          items: { type: string }
+        reasons:
+          type: array
+          items: { type: string }
+
+    TrendPoint:
+      type: object
+      properties:
+        day: { type: string, format: date }
+        created: { type: integer }
+        resolved: { type: integer }
+        breached: { type: integer }
+
+    CategoryReportRow:
+      type: object
+      properties:
+        categoryId: { type: string, format: uuid }
+        name: { type: string }
+        incidents: { type: integer }
+        openIncidents: { type: integer }
+        slaViolations: { type: integer }
+
+    EscalationRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        incidentId: { type: string, format: uuid }
+        reference: { type: string }
+        title: { type: string }
+        priority: { $ref: '#/components/schemas/Priority' }
+        level: { type: integer, minimum: 1, maximum: 3 }
+        reason: { type: string }
+        fromName: { type: string, nullable: true }
+        toName: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }

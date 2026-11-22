@@ -1,0 +1,20 @@
+# Secrets: never commit environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+*.bak*
+
+# Build output and dependencies
+node_modules/
+.next/
+target/
+*.tsbuildinfo
+.vercel/
+.turbo/
+
+# Local tooling
+.DS_Store
+.claude/
+*.log

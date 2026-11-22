@@ -1,0 +1,316 @@
+@import "tailwindcss";
+
+:root {
+  /* Shared system font stack. */
+  --sans: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --background: #ffffff;
+  --foreground: #000c17;
+
+  /* ── Setup wizard ──────────────────────────────────────────────────────────
+     All colours used by the setup wizard concept panel live here so the
+     palette can be adjusted in one place without touching component code.
+  ── */
+  --setup-panel-bg:          #000c1d;   /* dark left panel */
+  --setup-panel-border:      #1e293b;   /* divider between panel and form */
+  --setup-card-bg:           #000c1d;   /* diagram card inside the panel */
+  --setup-card-border:       #334155;   /* diagram card outline */
+
+  /* ── Design tokens (roles, not hues) ────────────────────────────────────────
+     Every new style uses these through the Tailwind names in @theme below:
+     bg-ground, bg-surface, bg-sunken, text-fg, text-fg-muted, text-fg-subtle,
+     border-line, border-line-strong, bg-action, text-action-fg, text-danger …
+     Contrast is checked against WCAG 2.2 AA in both themes: fg/muted/subtle and
+     the status colours ≥ 4.5:1 on surface and ground, line-strong ≥ 3:1.
+     Components live in components/ui/. Don't add raw gray-* classes. ── */
+  --ground: #f5f6f8;
+  --surface: #ffffff;
+  --sunken: #f1f3f6;
+  --fg: #111827;
+  --fg-muted: #525c6b;
+  --fg-subtle: #646e7e;
+  --line: #e4e7ec;
+  --line-strong: #858d9a;
+  /* Form fields: a soft fill with a faint edge; the edge strengthens on hover and focus. */
+  --field: #f4f5f7;
+  --field-line: #d9dde3;
+  --action: #111827;
+  --action-hover: #2b3445;
+  --action-fg: #ffffff;
+  --danger: #b42318;
+  --danger-soft: rgb(180 35 24 / 0.08);
+  --success: #15803d;
+  --success-soft: rgb(21 128 61 / 0.08);
+  --warning: #a15c07;
+  --warning-soft: rgb(161 92 7 / 0.1);
+  /* The beacon lamp on the home page: the one warm accent in the app. */
+  --beacon: #e0782f;
+  /* Purchase request progress, red (just asked) to green (in hand). */
+  --stage-1: #dc3d43;
+  --stage-2: #e5690f;
+  --stage-3: #c98a00;
+  --stage-4: #7ba428;
+  --stage-5: #2a9d5c;
+  /* Chart series (validated for CVD and contrast on --surface): created, resolved. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --focus: #2563eb;
+  --scrim: rgb(17 24 39 / 0.45);
+}
+
+/*
+ * Spotlight is intentionally a quiet interface.  The dark palette keeps the
+ * pitch black for the page ground and very dark gray for surfaces and sidebar.
+ * Typography and text colors stay unchanged.
+ */
+.dark {
+  --background: #131312;
+  --foreground: #ecebe8;
+
+  --color-gray-50: #1b1b1a;
+  --color-gray-100: #232321;
+  --color-gray-200: #2c2c2a;
+  --color-gray-300: #3e3e3b;
+  --color-gray-400: #acaba9;
+  --color-gray-500: #bebdbb;
+  --color-gray-600: #d4d3d1;
+  --color-gray-700: #e0dfdd;
+  --color-gray-800: #e8e7e5;
+  --color-gray-900: #edecec;
+
+  --setup-panel-bg: #0e0e0d;
+  --setup-panel-border: #282826;
+  --setup-card-bg: #131312;
+  --setup-card-border: #333330;
+
+  /* Warm charcoal, like Claude's apps: a grey ground, slightly lifted surfaces and soft borders
+     rather than black with bright outlines. The sidebar sits a shade deeper (--chrome). */
+  --ground: #131312;
+  --chrome: #0e0e0d;
+  --surface: #1b1b1a;
+  --sunken: #232321;
+  --fg: #ecebe8;
+  --fg-muted: rgba(236, 235, 232, 0.72);
+  --fg-subtle: #a9a8a4;
+  --line: #282826;
+  --line-strong: #6a6965;
+  --field: #1b1b1a;
+  --field-line: #2f2f2d;
+  --action: #ecebe8;
+  --action-hover: #d6d5d1;
+  --action-fg: #131312;
+  --danger: #f2877d;
+  --danger-soft: rgb(242 135 125 / 0.12);
+  --success: #5fd18b;
+  --success-soft: rgb(95 209 139 / 0.12);
+  --warning: #f0b549;
+  --warning-soft: rgb(240 181 73 / 0.12);
+  --beacon: #f0904a;
+  --stage-1: #f2555a;
+  --stage-2: #f7843a;
+  --stage-3: #f0b429;
+  --stage-4: #a9cf52;
+  --stage-5: #4cc38a;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --focus: #6ea8ff;
+  --scrim: rgb(0 0 0 / 0.55);
+}
+
+@theme inline {
+  --color-background:          var(--background);
+  --color-foreground:          var(--foreground);
+  --font-sans:                 var(--sans);
+  --font-wordmark:             var(--font-outfit), "Outfit", system-ui, sans-serif;
+
+  --color-setup-panel-bg:      var(--setup-panel-bg);
+  --color-setup-panel-border:  var(--setup-panel-border);
+  --color-setup-card-bg:       var(--setup-card-bg);
+  --color-setup-card-border:   var(--setup-card-border);
+
+  --color-ground:              var(--ground);
+  --color-surface:             var(--surface);
+  --color-sunken:              var(--sunken);
+  --color-fg:                  var(--fg);
+  --color-fg-muted:            var(--fg-muted);
+  --color-fg-subtle:           var(--fg-subtle);
+  --color-line:                var(--line);
+  --color-line-strong:         var(--line-strong);
+  --color-field:               var(--field);
+  --color-field-line:          var(--field-line);
+  --color-action:              var(--action);
+  --color-action-hover:        var(--action-hover);
+  --color-action-fg:           var(--action-fg);
+  --color-danger:              var(--danger);
+  --color-danger-soft:         var(--danger-soft);
+  --color-success:             var(--success);
+  --color-success-soft:        var(--success-soft);
+  --color-warning:             var(--warning);
+  --color-warning-soft:        var(--warning-soft);
+  --color-beacon:              var(--beacon);
+  --color-stage-1:             var(--stage-1);
+  --color-stage-2:             var(--stage-2);
+  --color-stage-3:             var(--stage-3);
+  --color-stage-4:             var(--stage-4);
+  --color-stage-5:             var(--stage-5);
+  --color-series-1:            var(--series-1);
+  --color-series-2:            var(--series-2);
+  --color-focus:               var(--focus);
+  --color-scrim:               var(--scrim);
+
+  /* Type scale: label 13, body 15, lead/h2 16, h1 24. Weights 400/500. Older pages' text-xs and
+     text-sm follow the same step up, so the whole app reads a touch larger. */
+  --text-label:                0.8125rem;
+  --text-label--line-height:   1.125rem;
+  --text-body:                 0.9375rem;
+  --text-body--line-height:    1.375rem;
+  --text-xs:                   0.8125rem;
+  --text-xs--line-height:      1.125rem;
+  --text-sm:                   0.9375rem;
+  --text-sm--line-height:      1.375rem;
+  --text-h2:                   1rem;
+  --text-h2--line-height:      1.5rem;
+  --text-h1:                   1.5rem;
+  --text-h1--line-height:      2rem;
+  --text-display:              2.5rem;
+  --text-display--line-height: 1.08;
+  --tracking-heading:         -0.025em;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--sans);
+}
+
+/* ── Legacy dark-mode patches ────────────────────────────────────────────────
+   Older markup uses raw gray and white classes; the overrides below keep it
+   readable in dark mode until every page is migrated to the role tokens. ── */
+
+/* White is used as a surface throughout the app.  Keep text-white untouched
+   (badges and action buttons depend on it) while turning only those surfaces
+   into the darkest neutral. */
+.dark .bg-white {
+  background-color: var(--color-gray-50);
+}
+
+.dark .border-white {
+  border-color: var(--color-gray-200);
+}
+
+/* The high-end gray utilities double as the app's primary action colour.
+   Their text-scale values are light in dark mode, so keep their background
+   values deliberately dark rather than inheriting the inverted text scale. */
+.dark .bg-gray-700 {
+  background-color: #3e3e3b;
+}
+
+.dark .bg-gray-800 {
+  background-color: #2c2c2a;
+}
+
+.dark .bg-gray-900 {
+  background-color: #2c2c2a;
+}
+
+.dark .border-gray-900 {
+  border-color: #2c2c2a;
+}
+
+.dark .hover\:bg-gray-700:hover {
+  background-color: #3e3e3b;
+}
+
+.dark .hover\:bg-gray-800:hover {
+  background-color: #2c2c2a;
+}
+
+.dark .bg-gray-900\/35 {
+  background-color: rgb(0 0 0 / 35%);
+}
+
+.dark .bg-gray-900\/40 {
+  background-color: rgb(0 0 0 / 40%);
+}
+
+/* The sidebar sits a shade deeper than the page, like Claude's apps. */
+.dark .app-sidebar {
+  background-color: var(--chrome);
+  border-color: var(--line);
+}
+
+
+.dark .app-sidebar .ring-white {
+  --tw-ring-color: var(--chrome);
+}
+
+/* Keep scrollbars present for discoverability, but make them disappear into
+   the dark shell instead of falling back to the browser's white control. */
+.dark * {
+  scrollbar-color: #3e3e3b transparent;
+}
+
+.dark ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #3e3e3b;
+  border: 2px solid var(--ground);
+  border-radius: 999px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+/* Scrollable regions should not advertise a scrollbar until the browser needs
+   one for interaction; this keeps the shell clean when their content fits. */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.dark input,
+.dark textarea,
+.dark select {
+  color-scheme: dark;
+}
+
+/* The chat's title bar lifts off the conversation once it scrolls under it. Dark needs a deeper
+   shadow to read at all against the charcoal. */
+.chat-header-lifted {
+  box-shadow: 0 10px 14px -12px rgb(0 0 0 / 0.16);
+}
+
+.dark .chat-header-lifted {
+  box-shadow: 0 10px 14px -10px rgb(0 0 0 / 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog[open] { animation: none !important; }
+}
+
+.theme-toggle__sun {
+  display: none;
+}
+
+.dark .theme-toggle__moon {
+  display: none;
+}
+
+.dark .theme-toggle__sun {
+  display: block;
+}
+
+* {
+  box-sizing: border-box;
+}

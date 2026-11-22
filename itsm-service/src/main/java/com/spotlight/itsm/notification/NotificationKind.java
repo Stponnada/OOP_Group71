@@ -1,0 +1,21 @@
+package com.spotlight.itsm.notification;
+
+/** The events people care about. Adding one does not require touching a channel. */
+public enum NotificationKind {
+    INCIDENT_CREATED,
+    INCIDENT_CLASSIFIED,
+    INCIDENT_ASSIGNED,
+    INCIDENT_ACKNOWLEDGED,
+    INCIDENT_PRIORITY_RAISED,
+    INCIDENT_INFO_REQUESTED,
+    INCIDENT_INFO_PROVIDED,
+    INCIDENT_NEEDS_ASSIGNMENT,
+    INCIDENT_MARKED_DUPLICATE,
+    INCIDENT_RESOLVED,
+    INCIDENT_REOPENED,
+    INCIDENT_CLOSED,
+    SLA_WARNING,
+    SLA_BREACHED,
+    INCIDENT_ESCALATED,
+    FEEDBACK_RECEIVED
+}

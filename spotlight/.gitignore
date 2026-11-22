@@ -1,0 +1,48 @@
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets and local env
+.env
+.env.*
+*.env
+*.local
+
+# Python cache/test
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Node / Next.js
+node_modules/
+website/node_modules/
+.next/
+website/.next/
+out/
+website/out/
+coverage/
+website/coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Local tool/state dirs
+.claude/
+.codex/
+
+# Keep agent-workflow docs private unless explicitly shared
+AGENTS.md
+CLAUDE.md
+website/AGENTS.md
+website/CLAUDE.md
+
+# Supabase local state
+supabase/.temp/
+
+# Supabase local branch tracking
+supabase/.branches/
